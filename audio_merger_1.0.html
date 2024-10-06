@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Audio Merger PWA</title>
+    <link href="https://fonts.googleapis.com/css2?family=Maven+Pro:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.40.0/tabler-icons.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --color-bg: #e2f1e4;
+            --color-primary: #2a0e40;
+            --color-secondary: #c3c2d0;
+            --color-tertiary: #d7d6e6;
+            --color-text: #7f7f7f;
+        }
+        body {
+            font-family: 'Maven Pro', sans-serif;
+            background-color: var(--color-bg);
+            color: var(--color-text);
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: var(--color-primary);
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .btn {
+            background-color: var(--color-primary);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background-color 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .btn:hover {
+            background-color: #3a1660;
+        }
+        .btn i {
+            margin-right: 8px;
+        }
+        #audioList {
+            margin-bottom: 20px;
+            background-color: var(--color-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+        }
+        #audioList div {
+            background-color: white;
+            margin-bottom: 8px;
+            padding: 12px;
+            border-radius: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #mergedAudio {
+            width: 100%;
+            margin-top: 20px;
+        }
+        .progress-container {
+            background-color: var(--color-secondary);
+            border-radius: 8px;
+            height: 8px;
+            margin-top: 20px;
+            overflow: hidden;
+        }
+        #mergeProgress {
+            width: 0;
+            height: 100%;
+            background-color: var(--color-primary);
+            transition: width 0.3s ease;
+        }
+        .hidden {
+            display: none;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        @media (max-width: 600px) {
+            body {
+                padding: 10px;
+            }
+            .container {
+                padding: 16px;
+            }
+            .btn {
+                width: 100%;
+                margin-bottom: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Audio Merger PWA</h1>
+        <input type="file" id="audioInput" accept="audio/*" multiple class="hidden">
+        <button id="addButton" class="btn"><i class="ti ti-plus"></i> Add Audio Files</button>
+        <button id="mergeButton" class="btn"><i class="ti ti-player-play"></i> Merge Audio Files</button>
+        <button id="clearButton" class="btn"><i class="ti ti-trash"></i> Clear Tracks</button>
+        <div id="audioList"></div>
+        <div class="progress-container hidden">
+            <div id="mergeProgress"></div>
+        </div>
+        <audio id="mergedAudio" controls class="hidden"></audio>
+    </div>
+
+    <script>
+        // Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js').then(function(registration) {
+                console.log('Service Worker registered with scope:', registration.scope);
+            }).catch(function(error) {
+                console.log('Service Worker registration failed:', error);
+            });
+        }
+
+        // Main App Logic
+        const audioInput = document.getElementById('audioInput');
+        const addButton = document.getElementById('addButton');
+        const mergeButton = document.getElementById('mergeButton');
+        const clearButton = document.getElementById('clearButton');
+        const audioList = document.getElementById('audioList');
+        const mergedAudio = document.getElementById('mergedAudio');
+        const mergeProgress = document.getElementById('mergeProgress');
+        const progressContainer = document.querySelector('.progress-container');
+        let audioBuffers = [];
+
+        // Load saved audio files on startup
+        loadSavedAudioFiles();
+
+        addButton.addEventListener('click', () => audioInput.click());
+
+        audioInput.addEventListener('change', async (event) => {
+            const files = Array.from(event.target.files);
+            for (let file of files) {
+                const audioBuffer = await loadAudio(file);
+                audioBuffers.push({ name: file.name, buffer: audioBuffer });
+            }
+            updateAudioList();
+            saveAudioFiles();
+        });
+
+        mergeButton.addEventListener('click', () => {
+            if (audioBuffers.length < 2) {
+                showDialog('Please select at least two audio files to merge.');
+                return;
+            }
+            mergeAudioBuffers(audioBuffers);
+        });
+
+        clearButton.addEventListener('click', () => {
+            audioBuffers = [];
+            updateAudioList();
+            saveAudioFiles();
+            mergedAudio.classList.add('hidden');
+            progressContainer.classList.add('hidden');
+        });
+
+        async function loadAudio(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            return await audioContext.decodeAudioData(arrayBuffer);
+        }
+
+        function updateAudioList() {
+            audioList.innerHTML = '';
+            audioBuffers.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+            audioBuffers.forEach((audio, index) => {
+                const listItem = document.createElement('div');
+                listItem.textContent = audio.name;
+                listItem.classList.add('fade-in');
+                const removeBtn = document.createElement('button');
+                removeBtn.innerHTML = '<i class="ti ti-x"></i>';
+                removeBtn.className = 'btn';
+                removeBtn.style.padding = '6px';
+                removeBtn.onclick = () => removeAudio(index);
+                listItem.appendChild(removeBtn);
+                audioList.appendChild(listItem);
+            });
+        }
+
+        function removeAudio(index) {
+            audioBuffers.splice(index, 1);
+            updateAudioList();
+            saveAudioFiles();
+        }
+
+        async function mergeAudioBuffers(buffers) {
+            progressContainer.classList.remove('hidden');
+            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const totalLength = buffers.reduce((sum, audio) => sum + audio.buffer.length, 0);
+            const mergedBuffer = audioContext.createBuffer(
+                buffers[0].buffer.numberOfChannels,
+                totalLength,
+                buffers[0].buffer.sampleRate
+            );
+
+            let offset = 0;
+            for (let [index, audio] of buffers.entries()) {
+                const buffer = audio.buffer;
+                for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
+                    const mergedChannelData = mergedBuffer.getChannelData(channel);
+                    const bufferChannelData = buffer.getChannelData(channel);
+                    mergedChannelData.set(bufferChannelData, offset);
+                }
+                offset += buffer.length;
+                mergeProgress.style.width = `${((index + 1) / buffers.length) * 100}%`;
+                await new Promise(resolve => setTimeout(resolve, 100)); // For visual feedback
+            }
+
+            const audioBlob = await bufferToWave(mergedBuffer, mergedBuffer.length);
+            const audioUrl = URL.createObjectURL(audioBlob);
+            mergedAudio.src = audioUrl;
+            mergedAudio.classList.remove('hidden');
+            showDialog('Audio files merged successfully!');
+        }
+
+        function bufferToWave(abuffer, len) {
+            // ... (same as before)
+        }
+
+        function saveAudioFiles() {
+            const audioData = audioBuffers.map(audio => ({
+                name: audio.name,
+                buffer: audio.buffer.getChannelData(0)
+            }));
+            localStorage.setItem('savedAudioFiles', JSON.stringify(audioData));
+        }
+
+        async function loadSavedAudioFiles() {
+            const savedData = localStorage.getItem('savedAudioFiles');
+            if (savedData) {
+                const audioData = JSON.parse(savedData);
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                for (let audio of audioData) {
+                    const buffer = audioContext.createBuffer(1, audio.buffer.length, audioContext.sampleRate);
+                    buffer.getChannelData(0).set(audio.buffer);
+                    audioBuffers.push({ name: audio.name, buffer: buffer });
+                }
+                updateAudioList();
+            }
+        }
+
+        function showDialog(message) {
+            const dialog = document.createElement('div');
+            dialog.style.position = 'fixed';
+            dialog.style.top = '50%';
+            dialog.style.left = '50%';
+            dialog.style.transform = 'translate(-50%, -50%)';
+            dialog.style.background = 'white';
+            dialog.style.padding = '20px';
+            dialog.style.borderRadius = '8px';
+            dialog.style.boxShadow = '0 4px 6px rgba(0, 0, 0, 0.1)';
+            dialog.style.zIndex = '1000';
+            dialog.innerHTML = `
+                <p style="margin: 0 0 15px 0;">${message}</p>
+                <button class="btn" style="width: 100%;">OK</button>
+            `;
+            document.body.appendChild(dialog);
+            dialog.querySelector('button').onclick = () => document.body.removeChild(dialog);
+        }
+
+        // PWA installation prompt
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            showInstallPrompt();
+        });
+
+        function showInstallPrompt() {
+            const installButton = document.createElement('button');
+            installButton.textContent = 'Install App';
+            installButton.classList.add('btn');
+            installButton.style.position = 'fixed';
+            installButton.style.bottom = '20px';
+            installButton.style.right = '20px';
+            installButton.addEventListener('click', async () => {
+                if (deferredPrompt) {
+                    deferredPrompt.prompt();
+                    const { outcome } = await deferredPrompt.userChoice;
+                    if (outcome === 'accepted') {
+                        console.log('User accepted the install prompt');
+                    }
+                    deferredPrompt = null;
+                }
+                document.body.removeChild(installButton);
+            });
+            document.body.appendChild(installButton);
+        }
+    </script>
+
+    <script>
+        // Service Worker
+        const CACHE_NAME = 'audio-merger-pwa-v1';
+        const urlsToCache = [
+            '/',
+            '/index.html',
+            'https://fonts.googleapis.com/css2?family=Maven+Pro:wght@400;500;700&display=swap',
+            'https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.40.0/tabler-icons.min.css'
+        ];
+
+        self.addEventListener('install', (event) => {
+            event.waitUntil(
+                caches.open(CACHE_NAME)
+                    .then((cache) => cache.addAll(urlsToCache))
+            );
+        });
+
+        self.addEventListener('fetch', (event) => {
+            event.respondWith(
+                caches.match(event.request)
+                    .then((response) => response || fetch(event.request))
+            );
+        });
+
+        self.addEventListener('activate', (event) => {
+            event.waitUntil(
+                caches.keys().then((cacheNames) => {
+                    return Promise.all(
+                        cacheNames.map((cacheName) => {
+                            if (cacheName !== CACHE_NAME) {
+                                return caches.delete(cacheName);
+                            }
+                        })
+                    );
+                })
+            );
+        });
+  </script>
